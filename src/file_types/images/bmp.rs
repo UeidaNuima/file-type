@@ -22,7 +22,7 @@ fn is_indexed_image(image: &RawImage) -> bool {
 impl BinaryInfo for RawImage {
     fn to_bytes(&self) -> Vec<u8> {
         if is_indexed_image(self) {
-            let mut buf = vec![];
+            let mut lines_buf = vec![];
             let mut palette_buf = vec![];
             let (palette, indexed_colors) = self.get_indexed_info();
             for palette_color in palette {
@@ -30,46 +30,70 @@ impl BinaryInfo for RawImage {
             }
             for indexed_line in indexed_colors.chunks(self.width as usize) {
                 let mut line_buf = vec![];
-                for indexed_colors_in_byte in indexed_line.chunks(8) {
+                let colors_per_pixel = match self.depth {
+                    ColorDepth::Depth1 => 8,
+                    ColorDepth::Depth4 => 2,
+                    ColorDepth::Depth8 => 1,
+                    depth => panic!("Not indexed color for depth {depth:?}"),
+                };
+                for indexed_colors_in_byte in indexed_line.chunks(colors_per_pixel) {
                     let mut byte_buf: u8 = 0;
-                    for indexed_color in indexed_colors_in_byte {
-                        byte_buf = (byte_buf << 1) | (*indexed_color as u8);
+                    if (self.depth as u8) < 8u8 {
+                        for indexed_color in indexed_colors_in_byte {
+                            byte_buf = (byte_buf << self.depth as u8) | (*indexed_color as u8);
+                        }
+                    } else {
+                        byte_buf = indexed_colors_in_byte[0] as u8;
                     }
 
-                    if indexed_colors_in_byte.len() < 8 {
+                    if indexed_colors_in_byte.len() < colors_per_pixel {
                         // align last colors to a full byte
-                        byte_buf <<= 8 - indexed_colors_in_byte.len();
+                        byte_buf <<=
+                            (colors_per_pixel - indexed_colors_in_byte.len()) * self.depth as usize;
                     }
 
                     line_buf.push(byte_buf);
                 }
                 // padding to multiple of 4
                 line_buf.extend(vec![0; get_padding_num(line_buf.len() as u32, 4) as usize]);
-                line_buf.reverse();
-                buf.extend(line_buf);
+                lines_buf.push(line_buf);
             }
-            buf.reverse();
-            [palette_buf, buf].concat()
+            lines_buf.reverse();
+            [palette_buf, lines_buf.concat()].concat()
         } else {
-            let mut buf = vec![];
+            let mut lines_buf = vec![];
             for pixel_line in self.data.chunks(self.width as usize) {
                 let mut line_buf = vec![];
                 for pixel in pixel_line {
-                    // BGR order
-                    line_buf.push(pixel.b);
-                    line_buf.push(pixel.g);
-                    line_buf.push(pixel.r);
-                    if self.depth == ColorDepth::Depth32 {
-                        line_buf.push(pixel.a);
+                    if matches!(self.depth, ColorDepth::Depth16) {
+                        // RGB order, RGB555
+                        // high endian for red
+                        let mut pixel16: u16 = 0;
+                        // 5 bits for r
+                        pixel16 |= pixel.r as u16 / 8;
+                        pixel16 <<= 5;
+                        // 5 bits for g
+                        pixel16 |= pixel.g as u16 / 8;
+                        pixel16 <<= 5;
+                        // 5 bits for b
+                        pixel16 |= pixel.b as u16 / 8;
+                        line_buf.extend(pixel16.to_le_bytes());
+                    } else {
+                        // BGR order，BGR888
+                        line_buf.push(pixel.b);
+                        line_buf.push(pixel.g);
+                        line_buf.push(pixel.r);
+                        if self.depth == ColorDepth::Depth32 {
+                            line_buf.push(pixel.a);
+                        }
                     }
                 }
                 // padding to multiple of 4
                 line_buf.extend(vec![0; get_padding_num(line_buf.len() as u32, 4) as usize]);
-                line_buf.reverse();
-                buf.extend(line_buf);
+                lines_buf.push(line_buf);
             }
-            buf.reverse();
-            buf
+            lines_buf.reverse();
+            lines_buf.concat()
         }
     }
 
@@ -294,12 +318,24 @@ pub mod tests {
         path::Path,
     };
 
+    use rand::Rng;
+
     use crate::file_types::images::common::{
         ColorDepth,
         image::{ColorPixel, RawImage},
     };
 
     use super::Bitmap;
+
+    pub fn generate_random_color() -> ColorPixel {
+        let mut rng = rand::rng();
+        ColorPixel::new_rgba(
+            rng.random_range(0..=255),
+            rng.random_range(0..=255),
+            rng.random_range(0..=255),
+            rng.random_range(0..=255),
+        )
+    }
 
     #[test]
     pub fn test_generate_24_depth() {
@@ -379,32 +415,67 @@ pub mod tests {
         let height: usize = 100;
         let mut image = RawImage::new(width as u32, height as u32, ColorDepth::Depth4);
 
+        let mut mock_palette = vec![];
+        for _ in 0..16 {
+            mock_palette.push(generate_random_color());
+        }
+
         for index in 0..(width * height) {
-            image.data[index] = match (index / width + index % width) % 16 {
-                0 => ColorPixel::new_rgb(255, 0, 0),
-                1 => ColorPixel::new_rgb(245, 10, 0),
-                2 => ColorPixel::new_rgb(230, 25, 0),
-                3 => ColorPixel::new_rgb(205, 50, 0),
-                4 => ColorPixel::new_rgb(155, 100, 0),
-                5 => ColorPixel::new_rgb(105, 150, 0),
-                6 => ColorPixel::new_rgb(55, 200, 0),
-                7 => ColorPixel::new_rgb(0, 255, 0),
-                8 => ColorPixel::new_rgb(0, 200, 55),
-                9 => ColorPixel::new_rgb(0, 150, 105),
-                10 => ColorPixel::new_rgb(0, 100, 155),
-                11 => ColorPixel::new_rgb(0, 50, 205),
-                12 => ColorPixel::new_rgb(0, 25, 230),
-                13 => ColorPixel::new_rgb(0, 10, 245),
-                14 => ColorPixel::new_rgb(255, 255, 255),
-                15 => ColorPixel::new_rgb(0, 0, 255),
-                _ => panic!("?"),
-            };
+            image.data[index] = mock_palette[index % 16];
         }
         let bmp = Bitmap::new(image);
 
         let path = Path::new("test/images");
         fs::create_dir_all(path).unwrap();
         let file = File::create("test/images/4.bmp").unwrap();
+        let mut writer = BufWriter::new(file);
+        writer.write_all(&bmp.to_bytes()).unwrap();
+    }
+
+    #[test]
+    pub fn test_generate_8_depth() {
+        let width: usize = 100;
+        let height: usize = 100;
+        let mut image = RawImage::new(width as u32, height as u32, ColorDepth::Depth8);
+
+        let mut mock_palette = vec![];
+        for _ in 0..256 {
+            mock_palette.push(generate_random_color());
+        }
+
+        for index in 0..(width * height) {
+            image.data[index] = mock_palette[index % 256];
+        }
+        let bmp = Bitmap::new(image);
+
+        let path = Path::new("test/images");
+        fs::create_dir_all(path).unwrap();
+        let file = File::create("test/images/8.bmp").unwrap();
+        let mut writer = BufWriter::new(file);
+        writer.write_all(&bmp.to_bytes()).unwrap();
+    }
+
+    #[test]
+    pub fn test_generate_16_depth() {
+        let mut image = RawImage::new(4096, 4096, ColorDepth::Depth16);
+
+        for r in 0u16..256 {
+            for g in 0u16..256 {
+                for b in 0u16..256 {
+                    let bx = (b & 0x0F) as u32;
+                    let by = (b >> 4) as u32;
+                    let x = r as u32 + 256 * bx;
+                    let y = g as u32 + 256 * by;
+                    image.set(x, y, ColorPixel::new_rgb(r as u8, g as u8, b as u8));
+                }
+            }
+        }
+
+        let bmp = Bitmap::new(image);
+
+        let path = Path::new("test/images");
+        fs::create_dir_all(path).unwrap();
+        let file = File::create("test/images/16.bmp").unwrap();
         let mut writer = BufWriter::new(file);
         writer.write_all(&bmp.to_bytes()).unwrap();
     }

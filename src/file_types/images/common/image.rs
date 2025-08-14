@@ -27,6 +27,18 @@ impl ColorPixel {
         Self::new_rgb(0, 0, 0)
     }
 
+    pub fn red() -> Self {
+        Self::new_rgb(255, 0, 0)
+    }
+
+    pub fn green() -> Self {
+        Self::new_rgb(0, 255, 0)
+    }
+
+    pub fn blue() -> Self {
+        Self::new_rgb(0, 0, 255)
+    }
+
     pub fn white_transparent() -> Self {
         Self::new_rgba(255, 255, 255, 0)
     }
