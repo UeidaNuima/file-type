@@ -104,7 +104,7 @@ impl RawImage {
     }
 }
 
-pub trait BinaryInfo {
-    fn to_bytes(&self) -> Vec<u8>;
-    fn get_byte_size(&self) -> u32;
-}
+// pub trait BinaryInfo {
+//     fn to_bytes(&self) -> Vec<u8>;
+//     fn get_byte_size(&self) -> u32;
+// }

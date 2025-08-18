@@ -5,12 +5,58 @@ use std::io::Write;
 
 use super::common::{
     ColorDepth,
-    image::{BinaryInfo, ColorPixel, RawImage},
-    utils::{get_padding_num, padding_to_base},
+    image::{ColorPixel, RawImage},
+    utils::{binary_resize_floor, get_padding_num, padding_to_base},
 };
 
-const BI_RGB: u32 = 0;
-const BI_BITFIELDS: u32 = 3;
+#[repr(u8)]
+#[derive(Default, PartialEq)]
+pub enum Compression {
+    #[default]
+    BiRgb = 0,
+    BiBitfields = 3,
+}
+
+pub struct ColorMask {
+    red: u8,
+    green: u8,
+    blue: u8,
+    alpha: u8,
+}
+
+impl ColorMask {
+    pub fn new_rgb(red: u8, green: u8, blue: u8) -> Self {
+        if red + green + blue > 16 {
+            panic!("Mask over flow")
+        }
+        ColorMask {
+            red,
+            green,
+            blue,
+            alpha: 0,
+        }
+    }
+
+    pub fn new_rgba(red: u8, green: u8, blue: u8, alpha: u8) -> Self {
+        if red + green + blue + alpha > 32 {
+            panic!("Mask over flow")
+        }
+        ColorMask {
+            red,
+            green,
+            blue,
+            alpha,
+        }
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let blue: u32 = (1 << self.blue) - 1;
+        let green: u32 = ((1 << self.green) - 1) << self.blue;
+        let red: u32 = ((1 << self.red) - 1) << (self.blue + self.green);
+        // omit alpha channel
+        [red.to_le_bytes(), green.to_le_bytes(), blue.to_le_bytes()].concat()
+    }
+}
 
 fn is_indexed_image(image: &RawImage) -> bool {
     matches!(
@@ -19,8 +65,8 @@ fn is_indexed_image(image: &RawImage) -> bool {
     )
 }
 
-impl BinaryInfo for RawImage {
-    fn to_bytes(&self) -> Vec<u8> {
+impl RawImage {
+    fn to_bytes(&self, color_mask: Option<&ColorMask>) -> Vec<u8> {
         if is_indexed_image(self) {
             let mut lines_buf = vec![];
             let mut palette_buf = vec![];
@@ -62,21 +108,48 @@ impl BinaryInfo for RawImage {
             [palette_buf, lines_buf.concat()].concat()
         } else {
             let mut lines_buf = vec![];
+            // default to RGB 555
             for pixel_line in self.data.chunks(self.width as usize) {
                 let mut line_buf = vec![];
                 for pixel in pixel_line {
-                    if matches!(self.depth, ColorDepth::Depth16) {
+                    if let Some(color_mask) = color_mask {
+                        match self.depth {
+                            ColorDepth::Depth16 => {
+                                // high endian for red
+                                let mut pixel16: u16 = 0;
+                                pixel16 |=
+                                    binary_resize_floor(pixel.r as u32, 8, color_mask.red) as u16;
+                                pixel16 <<= color_mask.green;
+                                pixel16 |=
+                                    binary_resize_floor(pixel.g as u32, 8, color_mask.green) as u16;
+                                pixel16 <<= color_mask.blue;
+                                pixel16 |=
+                                    binary_resize_floor(pixel.b as u32, 8, color_mask.blue) as u16;
+                                line_buf.extend(pixel16.to_le_bytes());
+                            }
+                            ColorDepth::Depth32 => {
+                                // high endian for red
+                                let mut pixel32: u32 = 0;
+                                pixel32 |= binary_resize_floor(pixel.r as u32, 8, color_mask.red);
+                                pixel32 <<= color_mask.green;
+                                pixel32 |= binary_resize_floor(pixel.g as u32, 8, color_mask.green);
+                                pixel32 <<= color_mask.blue;
+                                pixel32 |= binary_resize_floor(pixel.b as u32, 8, color_mask.blue);
+                                pixel32 <<= color_mask.alpha;
+                                pixel32 |= binary_resize_floor(pixel.b as u32, 8, color_mask.alpha);
+                                line_buf.extend(pixel32.to_le_bytes());
+                            }
+                            _ => panic!("Not support color mask for depth {:?}", self.depth),
+                        }
+                    } else if matches!(self.depth, ColorDepth::Depth16) {
                         // RGB order, RGB555
                         // high endian for red
                         let mut pixel16: u16 = 0;
-                        // 5 bits for r
-                        pixel16 |= pixel.r as u16 / 8;
+                        pixel16 |= binary_resize_floor(pixel.r as u32, 8, 5) as u16;
                         pixel16 <<= 5;
-                        // 5 bits for g
-                        pixel16 |= pixel.g as u16 / 8;
+                        pixel16 |= binary_resize_floor(pixel.g as u32, 8, 5) as u16;
                         pixel16 <<= 5;
-                        // 5 bits for b
-                        pixel16 |= pixel.b as u16 / 8;
+                        pixel16 |= binary_resize_floor(pixel.b as u32, 8, 5) as u16;
                         line_buf.extend(pixel16.to_le_bytes());
                     } else {
                         // BGR order，BGR888
@@ -200,14 +273,19 @@ pub struct BitmapInfoHeader {
 }
 
 impl BitmapInfoHeader {
-    pub fn new(color_depth: ColorDepth, width: u32, height: u32) -> Self {
+    pub fn new(color_depth: ColorDepth, width: u32, height: u32, compression: Compression) -> Self {
+        if compression == Compression::BiBitfields
+            && !matches!(color_depth, ColorDepth::Depth16 | ColorDepth::Depth32)
+        {
+            panic!("Color depth {color_depth:?} doesn't support BI_BITFIELDS");
+        }
         Self {
             bi_size: BitmapInfoHeader::get_byte_size(),
             bi_width: width,
             bi_height: height,
             bi_planes: 1,
             bi_bit_count: color_depth as u16,
-            bi_compression: BI_RGB,
+            bi_compression: compression as u32,
             bi_size_image: 0,
             // windows default (96 dpi)
             bi_x_pels_per_meter: 3780,
@@ -281,13 +359,23 @@ impl From<ColorPixel> for RgbQuad {
 pub struct Bitmap {
     file_header: BitmapFileHeader,
     info_header: BitmapInfoHeader,
+    color_mask: Option<ColorMask>,
     pub color_data: RawImage,
 }
 
 impl Bitmap {
-    pub fn new(image: RawImage) -> Self {
+    pub fn new(image: RawImage, color_mask: Option<ColorMask>) -> Self {
         let mut file_header = BitmapFileHeader::new(image.width * image.height);
-        let info_header = BitmapInfoHeader::new(image.depth, image.width, image.height);
+        let info_header = BitmapInfoHeader::new(
+            image.depth,
+            image.width,
+            image.height,
+            if color_mask.is_some() {
+                Compression::BiBitfields
+            } else {
+                Compression::BiRgb
+            },
+        );
         file_header.set_image_data_info(
             BitmapFileHeader::get_byte_size() + BitmapInfoHeader::get_byte_size(),
             image.get_byte_size(),
@@ -297,6 +385,7 @@ impl Bitmap {
             file_header,
             info_header,
             color_data: image,
+            color_mask,
         }
     }
 
@@ -304,7 +393,10 @@ impl Bitmap {
         let mut buf = vec![];
         buf.extend(self.file_header.to_bytes());
         buf.extend(self.info_header.to_bytes());
-        buf.extend(self.color_data.to_bytes());
+        if let Some(color_mask) = &self.color_mask {
+            buf.extend(color_mask.to_bytes());
+        }
+        buf.extend(self.color_data.to_bytes(self.color_mask.as_ref()));
 
         buf
     }
@@ -325,7 +417,7 @@ pub mod tests {
         image::{ColorPixel, RawImage},
     };
 
-    use super::Bitmap;
+    use super::{Bitmap, ColorMask};
 
     pub fn generate_random_color() -> ColorPixel {
         let mut rng = rand::rng();
@@ -353,7 +445,7 @@ pub mod tests {
             }
         }
 
-        let bmp = Bitmap::new(image);
+        let bmp = Bitmap::new(image, None);
 
         let path = Path::new("test/images");
         fs::create_dir_all(path).unwrap();
@@ -378,7 +470,7 @@ pub mod tests {
             }
         }
 
-        let bmp = Bitmap::new(image);
+        let bmp = Bitmap::new(image, None);
 
         let path = Path::new("test/images");
         fs::create_dir_all(path).unwrap();
@@ -400,7 +492,7 @@ pub mod tests {
                 ColorPixel::new_rgb(0, 255, 0)
             };
         }
-        let bmp = Bitmap::new(image);
+        let bmp = Bitmap::new(image, None);
 
         let path = Path::new("test/images");
         fs::create_dir_all(path).unwrap();
@@ -423,7 +515,7 @@ pub mod tests {
         for index in 0..(width * height) {
             image.data[index] = mock_palette[index % 16];
         }
-        let bmp = Bitmap::new(image);
+        let bmp = Bitmap::new(image, None);
 
         let path = Path::new("test/images");
         fs::create_dir_all(path).unwrap();
@@ -446,7 +538,7 @@ pub mod tests {
         for index in 0..(width * height) {
             image.data[index] = mock_palette[index % 256];
         }
-        let bmp = Bitmap::new(image);
+        let bmp = Bitmap::new(image, None);
 
         let path = Path::new("test/images");
         fs::create_dir_all(path).unwrap();
@@ -471,11 +563,36 @@ pub mod tests {
             }
         }
 
-        let bmp = Bitmap::new(image);
+        let bmp = Bitmap::new(image, None);
 
         let path = Path::new("test/images");
         fs::create_dir_all(path).unwrap();
         let file = File::create("test/images/16.bmp").unwrap();
+        let mut writer = BufWriter::new(file);
+        writer.write_all(&bmp.to_bytes()).unwrap();
+    }
+
+    #[test]
+    pub fn test_generate_16_depth_565() {
+        let mut image = RawImage::new(4096, 4096, ColorDepth::Depth16);
+
+        for r in 0u16..256 {
+            for g in 0u16..256 {
+                for b in 0u16..256 {
+                    let bx = (b & 0x0F) as u32;
+                    let by = (b >> 4) as u32;
+                    let x = r as u32 + 256 * bx;
+                    let y = g as u32 + 256 * by;
+                    image.set(x, y, ColorPixel::new_rgb(r as u8, g as u8, b as u8));
+                }
+            }
+        }
+
+        let bmp = Bitmap::new(image, Some(ColorMask::new_rgb(5, 6, 5)));
+
+        let path = Path::new("test/images");
+        fs::create_dir_all(path).unwrap();
+        let file = File::create("test/images/16-mask-565.bmp").unwrap();
         let mut writer = BufWriter::new(file);
         writer.write_all(&bmp.to_bytes()).unwrap();
     }
