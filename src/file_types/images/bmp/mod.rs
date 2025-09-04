@@ -49,7 +49,7 @@ impl ColorMask {
         }
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn as_bytes(&self) -> Vec<u8> {
         let blue: u32 = (1 << self.blue) - 1;
         let green: u32 = ((1 << self.green) - 1) << self.blue;
         let red: u32 = ((1 << self.red) - 1) << (self.blue + self.green);
@@ -66,13 +66,13 @@ fn is_indexed_image(image: &RawImage) -> bool {
 }
 
 impl RawImage {
-    fn to_bytes(&self, color_mask: Option<&ColorMask>) -> Vec<u8> {
+    fn as_bytes(&self, color_mask: Option<&ColorMask>) -> Vec<u8> {
         if is_indexed_image(self) {
             let mut lines_buf = vec![];
             let mut palette_buf = vec![];
             let (palette, indexed_colors) = self.get_indexed_info();
             for palette_color in palette {
-                palette_buf.extend(RgbQuad::from(palette_color).to_bytes());
+                palette_buf.extend(RgbQuad::from(palette_color).as_bytes());
             }
             for indexed_line in indexed_colors.chunks(self.width as usize) {
                 let mut line_buf = vec![];
@@ -191,6 +191,7 @@ impl RawImage {
 /// https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmapfileheader
 pub struct BitmapFileHeader {
     /// The file type; must be 0x4d42 (the ASCII string "BM").
+    /// Magic Number
     bf_type: u16,
     /// The size, in bytes, of the bitmap file.
     bf_size: u32,
@@ -213,7 +214,7 @@ impl BitmapFileHeader {
         }
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn as_bytes(&self) -> Vec<u8> {
         let mut buf = vec![];
         buf.write_all(&self.bf_type.to_le_bytes()).unwrap();
         buf.write_all(&self.bf_size.to_le_bytes()).unwrap();
@@ -305,7 +306,7 @@ impl BitmapInfoHeader {
         40
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn as_bytes(&self) -> Vec<u8> {
         let mut buf = vec![];
         buf.write_all(&self.bi_size.to_le_bytes()).unwrap();
         buf.write_all(&self.bi_width.to_le_bytes()).unwrap();
@@ -337,7 +338,7 @@ pub struct RgbQuad {
 }
 
 impl RgbQuad {
-    fn to_bytes(&self) -> Vec<u8> {
+    fn as_bytes(&self) -> Vec<u8> {
         vec![self.blue, self.green, self.red, self.reserved]
     }
     pub fn get_byte_size() -> u32 {
@@ -389,14 +390,14 @@ impl Bitmap {
         }
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn as_bytes(&self) -> Vec<u8> {
         let mut buf = vec![];
-        buf.extend(self.file_header.to_bytes());
-        buf.extend(self.info_header.to_bytes());
+        buf.extend(self.file_header.as_bytes());
+        buf.extend(self.info_header.as_bytes());
         if let Some(color_mask) = &self.color_mask {
-            buf.extend(color_mask.to_bytes());
+            buf.extend(color_mask.as_bytes());
         }
-        buf.extend(self.color_data.to_bytes(self.color_mask.as_ref()));
+        buf.extend(self.color_data.as_bytes(self.color_mask.as_ref()));
 
         buf
     }
@@ -451,7 +452,7 @@ pub mod tests {
         fs::create_dir_all(path).unwrap();
         let file = File::create("test/images/24.bmp").unwrap();
         let mut writer = BufWriter::new(file);
-        writer.write_all(&bmp.to_bytes()).unwrap();
+        writer.write_all(&bmp.as_bytes()).unwrap();
     }
 
     #[test]
@@ -476,7 +477,7 @@ pub mod tests {
         fs::create_dir_all(path).unwrap();
         let file = File::create("test/images/32.bmp").unwrap();
         let mut writer = BufWriter::new(file);
-        writer.write_all(&bmp.to_bytes()).unwrap();
+        writer.write_all(&bmp.as_bytes()).unwrap();
     }
 
     #[test]
@@ -498,7 +499,7 @@ pub mod tests {
         fs::create_dir_all(path).unwrap();
         let file = File::create("test/images/1.bmp").unwrap();
         let mut writer = BufWriter::new(file);
-        writer.write_all(&bmp.to_bytes()).unwrap();
+        writer.write_all(&bmp.as_bytes()).unwrap();
     }
 
     #[test]
@@ -521,7 +522,7 @@ pub mod tests {
         fs::create_dir_all(path).unwrap();
         let file = File::create("test/images/4.bmp").unwrap();
         let mut writer = BufWriter::new(file);
-        writer.write_all(&bmp.to_bytes()).unwrap();
+        writer.write_all(&bmp.as_bytes()).unwrap();
     }
 
     #[test]
@@ -544,7 +545,7 @@ pub mod tests {
         fs::create_dir_all(path).unwrap();
         let file = File::create("test/images/8.bmp").unwrap();
         let mut writer = BufWriter::new(file);
-        writer.write_all(&bmp.to_bytes()).unwrap();
+        writer.write_all(&bmp.as_bytes()).unwrap();
     }
 
     #[test]
@@ -569,7 +570,7 @@ pub mod tests {
         fs::create_dir_all(path).unwrap();
         let file = File::create("test/images/16.bmp").unwrap();
         let mut writer = BufWriter::new(file);
-        writer.write_all(&bmp.to_bytes()).unwrap();
+        writer.write_all(&bmp.as_bytes()).unwrap();
     }
 
     #[test]
@@ -594,6 +595,6 @@ pub mod tests {
         fs::create_dir_all(path).unwrap();
         let file = File::create("test/images/16-mask-565.bmp").unwrap();
         let mut writer = BufWriter::new(file);
-        writer.write_all(&bmp.to_bytes()).unwrap();
+        writer.write_all(&bmp.as_bytes()).unwrap();
     }
 }
