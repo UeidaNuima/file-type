@@ -1,0 +1,48 @@
+.core-container {
+  position: relative;
+}
+
+.original-str,
+.sliding-window {
+  display: flex;
+  flex-direction: row;
+  position: relative;
+  transition: left ease-out 0.2s;
+  left: 0px;
+}
+
+.original-str-item,
+.sliding-window-item {
+  box-sizing: border-box;
+  height: 30px;
+  width: 30px;
+  line-height: 30px;
+  text-align: center;
+  border: 1px solid black;
+  flex-shrink: 0;
+}
+
+.sliding-window {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.sliding-window-item-forward-search {
+  background-color: rgba(0, 255, 0, 0.3);
+}
+
+.sliding-window-item-pending-encoding {
+  background-color: rgba(255, 255, 0, 0.3);
+}
+
+.indicator-container {
+  height: 30px;
+}
+
+.block-indicator {
+  border: 2px solid red;
+  border-top: none;
+  position: absolute;
+  box-sizing: border-box;
+}
