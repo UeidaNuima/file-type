@@ -2,7 +2,7 @@
 
 ## 参考
 
-- [LZ77 and LZ78](https://en.wikipedia.org/wiki/LZ77_and_LZ78)
+- [维基百科](https://en.wikipedia.org/wiki/LZ77_and_LZ78)
 - [原始论文](https://courses.cs.duke.edu/spring03/cps296.5/papers/ziv_lempel_1977_universal_algorithm.pdf)
 
 ## 介绍
